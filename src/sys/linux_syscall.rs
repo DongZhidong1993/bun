@@ -84,6 +84,7 @@ fn once<T>(r: rustix::io::Result<T>) -> Result<T, i32> {
 // Hot path: open / openat / read / write / close / pread / pwrite
 // ──────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[inline]
 pub fn open(path: &ZStr, flags: i32, mode: Mode) -> Result<Fd, i32> {
     let oflags = rustix::fs::OFlags::from_bits_retain(flags as u32);
