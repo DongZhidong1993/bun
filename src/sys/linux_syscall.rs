@@ -81,18 +81,8 @@ fn once<T>(r: rustix::io::Result<T>) -> Result<T, i32> {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Hot path: open / openat / read / write / close / pread / pwrite
+// Hot path: openat / read / write / close / pread / pwrite
 // ──────────────────────────────────────────────────────────────────────────
-
-#[allow(dead_code)]
-#[inline]
-pub fn open(path: &ZStr, flags: i32, mode: Mode) -> Result<Fd, i32> {
-    let oflags = rustix::fs::OFlags::from_bits_retain(flags as u32);
-    let mode = rustix::fs::Mode::from_raw_mode(mode);
-    // rustix `open` issues `openat(AT_FDCWD, ...)` on arches without SYS_open
-    // (aarch64) — same as the kernel's own `open(2)` compat shim.
-    retry(|| rustix::fs::open(path.as_cstr(), oflags, mode)).map(own_fd)
-}
 
 #[inline]
 pub fn openat(dir: Fd, path: &ZStr, flags: i32, mode: Mode) -> Result<Fd, i32> {
