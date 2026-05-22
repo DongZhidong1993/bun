@@ -475,7 +475,9 @@ async function runTests() {
   const failedResultsTitles = [];
   const maxAttempts = 1 + (parseInt(options["retries"]) || 0);
 
-  const parallelism = options["parallel"] ? availableParallelism() : 1;
+  const parallelism = options["parallel"]
+    ? parseInt(process.env.BUN_TEST_PARALLELISM, 10) || availableParallelism()
+    : 1;
   console.log("parallelism", parallelism);
   const limit = pLimit(parallelism);
 
