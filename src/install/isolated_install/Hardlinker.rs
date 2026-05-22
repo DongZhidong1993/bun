@@ -314,8 +314,16 @@ impl Hardlinker {
                                             Ok(f) => f,
                                             Err(_) => break 'body Some(link_err1),
                                         };
+                                        // Try create; if EACCES/EPERM, unlink first then retry
                                         let outf = match sys::File::create(Fd::cwd(), self.dest.slice(), true) {
                                             Ok(f) => f,
+                                            Err(ref e) if e.get_errno() == sys::E::EACCES || e.get_errno() == sys::E::EPERM => {
+                                                let _ = sys::unlinkat(Fd::cwd(), self.dest.slice_z());
+                                                match sys::File::create(Fd::cwd(), self.dest.slice(), true) {
+                                                    Ok(f) => f,
+                                                    Err(_) => break 'body Some(link_err1),
+                                                }
+                                            }
                                             Err(_) => break 'body Some(link_err1),
                                         };
                                         if sys::copy_file::copy_file(inf.handle(), outf.handle()).is_err() {
