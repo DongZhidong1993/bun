@@ -308,6 +308,23 @@ impl Hardlinker {
                                             }
                                         }
                                     }
+                                    sys::E::EPERM | sys::E::EACCES => {
+                                        // OHOS SELinux blocks linkat; fall back to copy
+                                        let inf = match sys::File::openat(entry.dir, entry.basename, sys::O::RDONLY, 0) {
+                                            Ok(f) => f,
+                                            Err(_) => break 'body Some(link_err1),
+                                        };
+                                        let outf = match sys::File::create(Fd::cwd(), self.dest.slice(), true) {
+                                            Ok(f) => f,
+                                            Err(_) => break 'body Some(link_err1),
+                                        };
+                                        if sys::copy_file::copy_file(inf.handle(), outf.handle()).is_err() {
+                                            break 'body Some(link_err1);
+                                        }
+                                        if let Ok(stat) = sys::fstat(inf.handle()) {
+                                            let _ = sys::fchmod(outf.handle(), stat.st_mode);
+                                        }
+                                    }
                                     _ => break 'body Some(link_err1),
                                 },
                             }
