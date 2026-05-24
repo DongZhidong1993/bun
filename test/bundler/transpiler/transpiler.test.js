@@ -236,6 +236,32 @@ describe("Bun.Transpiler", () => {
       exp("export default interface Foo { bar(): void }\nexport const x = 1;", "export const x = 1;\n");
     });
 
+    it("rejects export clauses inside a non-declare namespace", () => {
+      const exp = ts.expectPrinted_;
+      const err = ts.expectParseError;
+
+      // Fuzz repro: an export clause referencing a sibling namespace member
+      // used to panic in the printer ("index out of bounds" on import_records).
+      err("namespace M {\rexport import M_A = M;}\r\nexport namespace M {\rexport {M_A as a};}\r", "Unexpected {");
+      err("namespace M { export import M_A = M; }\nexport namespace M { export { M_A as a }; }", "Unexpected {");
+
+      // esbuild and tsc (TS1194) both reject export declarations in a namespace.
+      err("namespace M { const x = 1; export { x }; }", "Unexpected {");
+      err("namespace M { export {}; }", "Unexpected {");
+      err("module M { const x = 1; export { x }; }", "Unexpected {");
+      err("namespace M { export { x } from 'y'; }", "Unexpected {");
+      err("namespace M { export * from 'y'; }", "Unexpected *");
+
+      // Still allowed in ambient contexts, where the body is type-only and erased.
+      exp("declare namespace M { export { x }; }", "");
+      exp("declare module 'm' { export { x }; }", "");
+      exp("declare namespace M { export * from 'y'; }", "");
+      exp("declare namespace A { namespace B { export { x }; } }", "");
+
+      // "export import" aliases inside a namespace keep working.
+      exp("namespace M { export import M_A = M; }", "var M;\n((M) => {\n  M.M_A = M;\n})(M ||= {})");
+    });
+
     it("should parse empty type parameters", () => {
       const exp = ts.expectPrinted_;
       const err = ts.expectParseError;
@@ -261,6 +287,49 @@ describe("Bun.Transpiler", () => {
       ts.expectPrinted_("var foo: Foo extends string | infer Foo extends string ? Foo : never", "var foo");
       ts.expectPrinted_("var foo: Foo extends string & infer Foo extends string ? Foo : never", "var foo");
     });
+
+    it("deeply nested infer constraints in template literal types do not hang the parser", async () => {
+      // Every `infer X extends` constraint attempt that backtracks gets re-parsed as
+      // the `extends` clause of a conditional type. Without memoizing backtracked
+      // attempts, that re-parse repeats the attempts nested inside it, so inputs that
+      // nest the pattern inside template literal types take O(2^depth) time (found by
+      // fuzzing Bun.build with a ~140-level input).
+      const fill = (n, unit) => Buffer.alloc(n * unit.length, unit).toString();
+      const depth = 128;
+      // Shape found by fuzzing: every constraint attempt fails near EOF (hard error).
+      const malformed =
+        "type LengthDown<\r\n  ? unknown extends " + fill(depth, "`${infer own extends ") + "`${infer $Rest}`\r";
+      // Valid variant: every constraint parses but is followed by "?", so every level
+      // backtracks and re-parses the constraint as part of a conditional type.
+      const valid =
+        "type X = " + fill(depth, "`${infer o extends ") + "number" + fill(depth, " ? 0 : 1}`") + ";\nexport {};\n";
+
+      using dir = tempDir("ts-infer-constraint-hang", {
+        "malformed.ts": malformed,
+        "valid.ts": valid,
+        "check.ts": `
+          const malformed = await Bun.build({ entrypoints: ["./malformed.ts"], target: "browser", throw: false });
+          if (malformed.success) throw new Error("malformed input should fail to parse");
+          const valid = await Bun.build({ entrypoints: ["./valid.ts"], target: "browser", throw: false });
+          if (!valid.success) throw new Error("valid input should build: " + valid.logs.join("\\n"));
+          console.log("DONE");
+        `,
+      });
+
+      await using proc = Bun.spawn({
+        cmd: [bunExe(), "check.ts"],
+        cwd: String(dir),
+        env: bunEnv,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+      expect(stderr).toBe("");
+      expect(stdout).toContain("DONE");
+      expect(exitCode).toBe(0);
+    }, 90_000);
 
     it.todo("instantiation expressions", async () => {
       const exp = ts.expectPrinted_;
@@ -543,6 +612,9 @@ function foo() {}
       exp("type Foo = {} extends (infer T extends {}) ? A<T> : never", "");
       exp("let x: A extends B<infer C extends D> ? D : never", "let x;\n");
       exp("let x: A extends B<infer C extends D ? infer C : never> ? D : never", "let x;\n");
+      exp("type Foo = `${infer T extends `${infer U extends `${infer V}`}`}`", "");
+      exp("type Foo = `${infer T extends `${infer U extends string ? 1 : 2}` ? 3 : 4}`", "");
+      exp("let x: T extends infer U extends `${infer V extends W ? 1 : 2}` ? U : never", "let x;\n");
       exp("let x: ([e1, e2, ...es]: any) => any", "let x;\n");
       exp("let x: (...[e1, e2, es]: any) => any", "let x;\n");
       exp("let x: (...[e1, e2, ...es]: any) => any", "let x;\n");
@@ -3914,6 +3986,81 @@ it("Bun.Transpiler.transform stack overflows", async () => {
   const code = await Bun.file(join(import.meta.dir, "fixtures", "lots-of-for-loop.js")).text();
   const transpiler = new Bun.Transpiler();
   expect(async () => await transpiler.transform(code)).toThrow(`Maximum call stack size exceeded`);
+});
+
+it("deeply nested expressions error instead of crashing the process", () => {
+  const script = `
+    const repeat = (fill, count) => Buffer.alloc(fill.length * count, fill).toString();
+    const shapes = [
+      n => repeat("- ", n) + "1",
+      n => repeat("f(", n) + "1" + repeat(")", n),
+      n => repeat("[", n) + "1" + repeat("]", n),
+      n => "void " + repeat("- ", n) + "1",
+      n => repeat("[", n) + "() => 1" + repeat("]", n) + ";{ let x; }",
+      n => repeat("[", n) + "1" + repeat("]", n) + "; someLongIdentifier + anotherIdentifier;",
+      n => "void ((x" + repeat(" ?? x", n) + ") < 1)",
+      n => "(a" + repeat(" && a", n) + ") == 1;",
+      n => "f() ? 1 : g()" + repeat(" || g()", n) + ";",
+      n => "let " + repeat("[", n) + "x" + repeat("]", n) + " = y;",
+    ];
+    const minifyShapes = [
+      n => "function f(){let x = 1; return a" + repeat(" && a", n) + " && x}",
+      n =>
+        "function f(){function g(){return x}" +
+        repeat("[", n) +
+        "1" +
+        repeat("]", n) +
+        ";let x = 1;return " +
+        repeat("a", 500) +
+        ";}",
+    ];
+    const check = (transpiler, src) => {
+      try {
+        transpiler.transformSync(src);
+      } catch (e) {
+        if (!/Maximum call stack size exceeded|StackOverflow/.test(String(e?.message))) throw e;
+      }
+    };
+    for (const shape of shapes) {
+      for (const n of [4000, 20000, 100000]) {
+        check(new Bun.Transpiler({ loader: "js" }), shape(n));
+      }
+    }
+    for (const shape of minifyShapes) {
+      for (const n of [4000, 20000, 100000]) {
+        check(new Bun.Transpiler({ loader: "js", minify: true }), shape(n));
+      }
+    }
+    console.log("depth-ok");
+  `;
+  const { stdout, exitCode, signalCode } = Bun.spawnSync({
+    cmd: [bunExe(), "-e", script],
+    stdout: "pipe",
+    stderr: "pipe",
+    env: bunEnv,
+  });
+
+  expect(stdout.toString()).toBe("depth-ok\n");
+  expect([exitCode, signalCode ?? undefined]).toEqual([0, undefined]);
+}, 60_000);
+
+it("running a file with deeply nested unary operators does not crash the process", () => {
+  const code = Buffer.alloc(2 * 4000, "- ").toString() + "1";
+  const { exitCode, signalCode } = Bun.spawnSync({
+    cmd: [bunExe(), "-e", code],
+    stdout: "pipe",
+    stderr: "pipe",
+    env: bunEnv,
+  });
+
+  expect(signalCode ?? undefined).toBeUndefined();
+  expect([0, 1]).toContain(exitCode);
+});
+
+it("does not duplicate the branch when simplifying an unused ternary with a comma test", () => {
+  const transpiler = new Bun.Transpiler({ loader: "js" });
+  expect(transpiler.transformSync("(f(), g()) ? 1 : h();").trim()).toBe("f(), g() || h();");
+  expect(transpiler.transformSync("(f(), g()) ? h() : 1;").trim()).toBe("f(), g() && h();");
 });
 
 describe("arrow function parsing after const declaration (scope mismatch bug)", () => {

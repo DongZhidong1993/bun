@@ -445,8 +445,8 @@ pub unsafe fn copy_file_range(
     }
 }
 
-/// OHOS kernel sends uncatchable SIGSYS instead of -ENOSYS for
-/// unimplemented syscalls. Set in c-bindings.cpp based on __OHOS__.
+// OHOS kernel sends uncatchable SIGSYS instead of -ENOSYS for
+// unimplemented syscalls. Set in c-bindings.cpp based on __OHOS__.
 unsafe extern "C" {
     static BUN_OHOS_DISABLE_PIDFD: bool;
 }

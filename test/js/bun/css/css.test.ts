@@ -7466,6 +7466,31 @@ describe("css tests", () => {
     minify_test("@page \\31 st{margin:1em}", "@page \\31 st{margin:1em}");
   });
 
+  describe("font-palette-values", () => {
+    minify_test(
+      "@font-palette-values --x{font-family:Foo;base-palette:2}",
+      "@font-palette-values --x{font-family:Foo;base-palette:2}",
+    );
+    minify_test("@font-palette-values --x{base-palette:light}", "@font-palette-values --x{base-palette:light}");
+    minify_test("@font-palette-values --x{base-palette:65535}", "@font-palette-values --x{base-palette:65535}");
+    minify_test(
+      "@font-palette-values --x{override-colors:0 red,1 #00f}",
+      "@font-palette-values --x{override-colors:0 red,1 #00f}",
+    );
+
+    // Out-of-range palette indices don't fit the internal u16 storage; they
+    // must be preserved as unknown declarations instead of panicking.
+    minify_test("@font-palette-values --x{base-palette:99999}", "@font-palette-values --x{base-palette:99999}");
+    minify_test("@font-palette-values --x{base-palette:-1}", "@font-palette-values --x{base-palette:-1}");
+    minify_test(
+      "@font-palette-values --x{override-colors:99999 red}",
+      "@font-palette-values --x{override-colors:99999 red}",
+    );
+    minify_test("@font-palette-values --x{override-colors:-1 red}", "@font-palette-values --x{override-colors:-1 red}");
+    // Fuzzer-minimized input: unterminated block with an overflowing index.
+    minify_test("@font-palette-values --{base-palette:99999", "@font-palette-values --{base-palette:99999}");
+  });
+
   describe("edge cases", () => {
     describe("invalid gradient", () => {
       cssTest(
@@ -7501,6 +7526,120 @@ describe("css tests", () => {
       minify_test(".foo { color: var(--x, lch(40% 0.1 30)) }", ".foo{color:var(--x,lch(40% .1 30))}");
       minify_test('.foo { color: "a" oklab(40% 0.1 0.1) }', '.foo{color:"a" oklab(40% .1 .1)}');
       minify_test('.foo { color: "a" lab(40% 0.1 0.1) }', '.foo{color:"a" lab(40% .1 .1)}');
+    });
+
+    describe("color fallbacks with system colors and currentColor", () => {
+      prefix_test(
+        `
+          .foo {
+            background: background linear-gradient(lch(8% 76 2), lch(51% 66 6));
+          }
+        `,
+        indoc`
+          .foo {
+            background: background linear-gradient(#41001b, #da3671);
+            background: background linear-gradient(lch(8% 76 2), lch(51% 66 6));
+          }
+        `,
+        {
+          chrome: 95 << 16,
+        },
+      );
+      prefix_test(
+        `
+          .foo {
+            background: background linear-gradient(lch(8% 76 2), lch(51% 66 6));
+          }
+        `,
+        indoc`
+          .foo {
+            background: background linear-gradient(color(display-p3 .342311 -.157987 .0918331), color(display-p3 .787212 .27046 .444387));
+            background: background linear-gradient(lch(8% 76 2), lch(51% 66 6));
+          }
+        `,
+        {
+          safari: 14 << 16,
+        },
+      );
+      prefix_test(
+        `
+          .foo {
+            background: linear-gradient(currentColor, lch(50% 50 180));
+          }
+        `,
+        indoc`
+          .foo {
+            background: linear-gradient(currentColor, #008675);
+            background: linear-gradient(currentColor, lch(50% 50 180));
+          }
+        `,
+        {
+          chrome: 95 << 16,
+        },
+      );
+      prefix_test(
+        `
+          .foo {
+            background: buttonface linear-gradient(lch(50% 50 180), canvas);
+          }
+        `,
+        indoc`
+          .foo {
+            background: buttonface linear-gradient(#008675, canvas);
+            background: buttonface linear-gradient(lch(50% 50 180), canvas);
+          }
+        `,
+        {
+          chrome: 95 << 16,
+        },
+      );
+      prefix_test(
+        `
+          .foo {
+            color: light-dark(buttonface, lch(50% 50 180));
+          }
+        `,
+        indoc`
+          .foo {
+            color: var(--buncss-light, buttonface) var(--buncss-dark, lch(50% 50 180));
+          }
+        `,
+        {
+          chrome: 95 << 16,
+        },
+      );
+      prefix_test(
+        `
+          .foo {
+            text-shadow: 0 0 currentColor, 0 0 lch(50% 50 180);
+          }
+        `,
+        indoc`
+          .foo {
+            text-shadow: 0 0, 0 0 #008675;
+            text-shadow: 0 0, 0 0 lch(50% 50 180);
+          }
+        `,
+        {
+          chrome: 95 << 16,
+        },
+      );
+      prefix_test(
+        `
+          .foo {
+            text-shadow: 0 0 currentColor, 0 0 lch(50% 50 180);
+          }
+        `,
+        indoc`
+          .foo {
+            text-shadow: 0 0, 0 0 color(display-p3 -.0472161 .537112 .461858);
+            text-shadow: 0 0, 0 0 lch(50% 50 180);
+          }
+        `,
+        {
+          safari: 14 << 16,
+        },
+      );
     });
 
     // Deeply nested @keyframes with invalid percentages
