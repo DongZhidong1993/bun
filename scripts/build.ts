@@ -392,6 +392,8 @@ function parseArgs(argv: string[]): CliArgs {
     "androidNdk",
     "ohosSysroot",
     "ohosSdkRoot",
+    "macosSdk",
+    "osxDeploymentTarget",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
