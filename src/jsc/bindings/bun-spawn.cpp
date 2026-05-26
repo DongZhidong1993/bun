@@ -19,10 +19,6 @@
 #include <sys/prctl.h>
 #endif
 
-#if defined(__OHOS__)
-#include <spawn.h>
-#endif
-
 extern char** environ;
 
 #ifndef CLOSE_RANGE_CLOEXEC
@@ -158,71 +154,7 @@ extern "C" ssize_t posix_spawn_bun(
     bool use_fork_fallback = false;
 
     pid_t child;
-#if defined(__OHOS__)
-    // OHOS: SELinux may block fork() for hnp_file type apps.  Use
-    // posix_spawn() instead — musl's implementation calls
-    // clone(CLONE_VM|CLONE_VFORK)+execve, which bypasses the restriction.
-    //
-    // Limitation: posix_spawn_file_actions_* (dup2/close/open) are stubs
-    // on OHOS musl — they succeed but are never applied.  Consequently
-    // the child inherits the parent's fd table without redirection:
-    //   - async Bun.spawn() + socketpair  ✅  (fds inherited, parent reads)
-    //   - spawnSync stdout capture         ❌  (dup2 in file_actions is no-op)
-    // We still pass file_actions for forward-compatibility.
-    //
-    // Additional gaps vs the fork path (addressed in follow-ups):
-    //   - sigprocmask is not restored in the child
-    //   - PR_SET_PDEATHSIG is not set
-    //   - closeRangeOrLoop is not called (fd leak possible)
-    {
-        posix_spawn_file_actions_t file_actions;
-        posix_spawn_file_actions_init(&file_actions);
-        {
-            const auto& actions = request->actions;
-            for (size_t i = 0; i < actions.len; i++) {
-                const bun_spawn_request_file_action_t& act = actions.ptr[i];
-                switch (act.type) {
-                case FileActionType::Close:
-                    posix_spawn_file_actions_addclose(&file_actions, act.fds[0]);
-                    break;
-                case FileActionType::Dup2:
-                    posix_spawn_file_actions_adddup2(&file_actions, act.fds[0], act.fds[1]);
-                    break;
-                case FileActionType::Open:
-                    posix_spawn_file_actions_addopen(&file_actions, act.fds[0], act.path, act.flags, act.mode);
-                    break;
-                default: break;
-                }
-            }
-        }
-
-        posix_spawnattr_t attr;
-        posix_spawnattr_init(&attr);
-        {
-            sigset_t childmask = oldmask;
-            short flags = POSIX_SPAWN_SETSIGMASK;
-            if (request->new_process_group) {
-                flags |= POSIX_SPAWN_SETPGROUP;
-            }
-#if defined(POSIX_SPAWN_RESETIDS)
-            flags |= POSIX_SPAWN_RESETIDS;
-#endif
-            posix_spawnattr_setflags(&attr, flags);
-            posix_spawnattr_setsigmask(&attr, &childmask);
-        }
-
-        int spawn_rc = posix_spawn(&child, path, &file_actions, &attr, argv, envp);
-        posix_spawn_file_actions_destroy(&file_actions);
-        posix_spawnattr_destroy(&attr);
-
-        if (spawn_rc != 0) {
-            res = spawn_rc;
-            child = -1;
-        } else {
-            use_fork_fallback = true;
-        }
-    }
-#elif OS(LINUX)
+#if OS(LINUX) && !defined(__OHOS__)
     child = vfork();
     if (child == -1) {
         use_fork_fallback = true;
@@ -230,6 +162,12 @@ extern "C" ssize_t posix_spawn_bun(
     }
 #else
     child = fork();
+#if defined(__OHOS__)
+    // OHOS uses fork() (vfork is blocked by seccomp). With fork(), child has
+    // its own memory — the volatile child_errno mechanism (used for vfork
+    // shared-memory semantics) is unreliable. Skip child_errno checks.
+    use_fork_fallback = true;
+#endif
 #endif
 
 #if OS(DARWIN) || OS(FREEBSD)
