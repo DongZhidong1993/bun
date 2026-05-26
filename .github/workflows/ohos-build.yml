@@ -59,14 +59,14 @@ jobs:
             # Use local repo objects to avoid download (~5s vs ~30s)
             git clone --reference "$LOCAL/.git" \
               https://github.com/springmin/bun.git bun 2>/dev/null || \
-              git clone --depth 1 --branch ohos-aarm64 \
+              git clone --depth 1 --branch ohos-aarch64 \
                 https://github.com/springmin/bun.git bun
             cd bun
-            git fetch origin ohos-aarm64 --depth=1
+            git fetch origin ohos-aarch64 --depth=1
             git checkout -f FETCH_HEAD
             echo "✅ Cloned from local reference"
           else
-            git clone --depth 1 --branch ohos-aarm64 \
+            git clone --depth 1 --branch ohos-aarch64 \
               https://github.com/springmin/bun.git bun
             echo "⚠️  Full clone (no local reference)"
           fi
@@ -209,7 +209,7 @@ jobs:
       - name: Package binary
         working-directory: bun
         run: |
-          VERSION=$(build/release-ohos/bun --version 2>/dev/null || echo "1.3.14")
+          VERSION=$(build/release-ohos/bun --version 2>/dev/null || python3 -c "import json; print(json.load(open('package.json'))['version'])")
           COMMIT=$(git rev-parse --short HEAD)
           DATE=$(date +%Y%m%d_%H%M%S)
           NAME="bun-ohos-aarch64-${VERSION}-${COMMIT}-${DATE}"
