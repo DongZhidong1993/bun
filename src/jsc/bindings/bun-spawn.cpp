@@ -29,6 +29,13 @@ extern char** environ;
 extern "C" ssize_t bun_close_range(unsigned int start, unsigned int end, unsigned int flags);
 #endif
 
+// OHOS kernel sends uncatchable SIGSYS for unimplemented prctl commands.
+// Define to skip PR_SET_PDEATHSIG on OHOS (child processes won't inherit
+// death signal, but the alternative is a process-killing SIGSYS).
+#if defined(__OHOS__)
+#define BUN_OHOS_DISABLE_PRCTL 1
+#endif
+
 // Helper: get max fd from system, clamped to sane limits and optionally to 'end' parameter
 static inline int getMaxFd(int start, int end)
 {
@@ -218,7 +225,9 @@ extern "C" ssize_t posix_spawn_bun(
         // Under vfork the parent is suspended, so there is no race between
         // vfork returning and this prctl taking effect.
         if (request->linux_pdeathsig != 0) {
+#if !defined(BUN_OHOS_DISABLE_PRCTL)
             prctl(PR_SET_PDEATHSIG, request->linux_pdeathsig, 0, 0, 0);
+#endif
         }
 #endif
 
