@@ -94,19 +94,28 @@ pub fn openat(dir: Fd, path: &ZStr, flags: i32, mode: Mode) -> Result<Fd, i32> {
 
 #[inline]
 pub(crate) fn openat2_beneath(dir: Fd, path: &ZStr, flags: i32, mode: Mode) -> Result<Fd, i32> {
-    let oflags = rustix::fs::OFlags::from_bits_retain(flags as u32);
-    let mode = rustix::fs::Mode::from_raw_mode(mode);
-    let dir = dir.as_borrowed_fd();
-    retry(|| {
-        rustix::fs::openat2(
-            dir,
-            path.as_cstr(),
-            oflags,
-            mode,
-            rustix::fs::ResolveFlags::BENEATH,
-        )
-    })
-    .map(own_fd)
+    // OHOS seccomp blocks openat2 with uncatchable SIGSYS.
+    #[cfg(target_env = "ohos")]
+    {
+        let _ = (dir, path, flags, mode);
+        return Err(libc::ENOSYS);
+    }
+    #[cfg(not(target_env = "ohos"))]
+    {
+        let oflags = rustix::fs::OFlags::from_bits_retain(flags as u32);
+        let mode = rustix::fs::Mode::from_raw_mode(mode);
+        let dir = dir.as_borrowed_fd();
+        retry(|| {
+            rustix::fs::openat2(
+                dir,
+                path.as_cstr(),
+                oflags,
+                mode,
+                rustix::fs::ResolveFlags::BENEATH,
+            )
+        })
+        .map(own_fd)
+    }
 }
 
 #[inline]
@@ -447,18 +456,27 @@ pub unsafe fn copy_file_range(
     len: usize,
     flags: u32,
 ) -> isize {
+    // OHOS seccomp blocks copy_file_range with uncatchable SIGSYS.
+    #[cfg(target_env = "ohos")]
+    {
+        let _ = (in_, off_in, out, off_out, len, flags);
+        return -1;
+    }
     // SAFETY: raw `copy_file_range(2)`; kernel validates fds; offset ptrs may
     // be null.
-    unsafe {
-        libc::syscall(
-            libc::SYS_copy_file_range,
-            in_,
-            off_in,
-            out,
-            off_out,
-            len,
-            flags as libc::c_long,
-        ) as isize
+    #[cfg(not(target_env = "ohos"))]
+    {
+        unsafe {
+            libc::syscall(
+                libc::SYS_copy_file_range,
+                in_,
+                off_in,
+                out,
+                off_out,
+                len,
+                flags as libc::c_long,
+            ) as isize
+        }
     }
 }
 

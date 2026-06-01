@@ -2631,6 +2631,16 @@ pub fn renameat2(from_dir: bun.FD, from: [:0]const u8, to_dir: bun.FD, to: [:0]c
         return renameat(from_dir, from, to_dir, to);
     }
 
+    // OHOS seccomp blocks renameat2 with uncatchable SIGSYS.
+    // Fall back to delete+rename path (non-atomic but correct).
+    // BUN_OHOS_DISABLE_PIDFD is true on OHOS (from c-bindings.cpp).
+    if (comptime Environment.isLinux) {
+        if (bun.c.BUN_OHOS_DISABLE_PIDFD) {
+            if (flags.int() != 0) return .{ .err = Error.fromCode(.NOSYS, .rename) };
+            return renameat(from_dir, from, to_dir, to);
+        }
+    }
+
     while (true) {
         const rc = switch (comptime Environment.os) {
             .linux => std.os.linux.renameat2(@intCast(from_dir.cast()), from.ptr, @intCast(to_dir.cast()), to.ptr, flags.int()),

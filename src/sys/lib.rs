@@ -2313,7 +2313,7 @@ mod posix_impl {
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub static SUPPORTS_STATX_ON_LINUX: core::sync::atomic::AtomicBool =
-        core::sync::atomic::AtomicBool::new(true);
+        core::sync::atomic::AtomicBool::new(cfg!(not(target_env = "ohos")));
 
     /// `STATX_*` request mask covering every field `node:fs Stats` consumes
     /// (sys.zig:614 `StatxField` — all variants OR'd, the only mask the Zig
