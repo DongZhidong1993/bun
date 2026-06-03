@@ -180,7 +180,7 @@ pub unsafe extern "C" fn main(argc: c_int, argv: *const *const c_char) -> c_int 
     // exiting, instead of letting seccomp kill the process silently.
     #[cfg(target_env = "ohos")]
     {
-        extern "C" {
+        unsafe extern "C" {
             fn ohos_setup_sigsys_handler();
         }
         // SAFETY: called once on the main thread before any other thread
