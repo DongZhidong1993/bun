@@ -3473,6 +3473,7 @@ mod posix_impl {
     }
     #[cfg(any(target_os = "linux", target_os = "android"))]
     impl MemfdFlags {
+        #[allow(dead_code)]
         #[inline]
         fn older_kernel_flag(self) -> u32 {
             match self {
