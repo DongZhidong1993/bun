@@ -1783,11 +1783,14 @@ impl<'a> PackageInstaller<'a> {
 
             #[cfg(target_env = "ohos")]
             if let package_install::InstallResult::Success = &install_result {
-                if let Ok(mut pkg_path) = AbsPath::from(self.node_modules.path.as_slice()) {
-                    if pkg_path.append(alias.slice(string_buf!())).is_ok() {
-                        ohos_sign_native_binaries(pkg_path.slice());
-                    }
+                let mut pkg_path: AbsPath = match AbsPath::from(self.node_modules.path.as_slice()) {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                if pkg_path.append(alias.slice(string_buf!())).is_err() {
+                    return;
                 }
+                ohos_sign_native_binaries(pkg_path.slice());
             }
 
             match install_result {
