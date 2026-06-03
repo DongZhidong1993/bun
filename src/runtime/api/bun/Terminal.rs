@@ -879,6 +879,7 @@ fn get_open_pty_fn() -> Option<OpenPtyFn> {
     // On Linux/Android, openpty is in libutil, which may not be linked
     // Load it dynamically via dlopen
     #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(not(target_env = "ohos"))]
     {
         return lib_util::get_open_pty();
     }
