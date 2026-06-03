@@ -474,7 +474,7 @@ fn getOpenPtyFn() ?OpenPtyFn {
         return &c.openpty;
     }
 
-    // On Linux, openpty is in libutil, which may not be linked
+    // On Linux (including OHOS), openpty is in libutil or libc, which may not be linked
     // Load it dynamically via dlopen
     if (comptime Environment.isLinux) {
         return LibUtil.getOpenPty();

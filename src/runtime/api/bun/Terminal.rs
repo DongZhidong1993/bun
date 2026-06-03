@@ -789,7 +789,7 @@ pub type OpenPtyFn = unsafe extern "C" fn(
 ) -> c_int;
 
 /// Dynamic loading of openpty on Linux (it's in libutil which may not be linked)
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "ohos"))]
 mod lib_util {
     use super::*;
     use bun_core::ZStr;
@@ -827,7 +827,15 @@ mod lib_util {
     }
 
     pub(super) fn get_open_pty() -> Option<OpenPtyFn> {
-        sys::dlsym_with_handle!(OpenPtyFn, "openpty", get_handle())
+        // First try the handle from dlopen (specific library)
+        if let Some(f) = sys::dlsym_with_handle!(OpenPtyFn, "openpty", get_handle()) {
+            return Some(f);
+        }
+        // Fallback: RTLD_DEFAULT — covers musl/OHOS where openpty is in libc
+        // but some runtimes may not expose it through a dlopen'd handle.
+        let name = c"openpty";
+        let p = unsafe { libc::dlsym(core::ptr::null_mut(), name.as_ptr()) };
+        if p.is_null() { None } else { Some(unsafe { core::mem::transmute(p) }) }
     }
 }
 
@@ -855,12 +863,12 @@ fn get_open_pty_fn() -> Option<OpenPtyFn> {
 
     // On Linux, openpty is in libutil, which may not be linked
     // Load it dynamically via dlopen
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "ohos"))]
     {
         return lib_util::get_open_pty();
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android", target_os = "ohos")))]
     None
 }
 
