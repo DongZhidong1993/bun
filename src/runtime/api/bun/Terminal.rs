@@ -809,11 +809,13 @@ mod lib_util {
         }
         LOADED.store(true, Relaxed);
 
-        // Try libutil.so first (most common), then libutil.so.1
-        const LIB_NAMES: [&ZStr; 3] = [
+        // Try libutil.so first (most common), then libutil.so.1,
+        // libc.so.6 (glibc), then libc.so (musl/ohos).
+        const LIB_NAMES: [&ZStr; 4] = [
             bun_core::zstr!("libutil.so"),
             bun_core::zstr!("libutil.so.1"),
             bun_core::zstr!("libc.so.6"),
+            bun_core::zstr!("libc.so"),
         ];
         for lib_name in LIB_NAMES {
             if let Some(h) = sys::dlopen(lib_name, sys::RTLD::LAZY) {

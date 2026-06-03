@@ -444,8 +444,9 @@ const LibUtil = struct {
         if (loaded) return handle;
         loaded = true;
 
-        // Try libutil.so first (most common), then libutil.so.1
-        const lib_names = [_][:0]const u8{ "libutil.so", "libutil.so.1", "libc.so.6" };
+        // Try libutil.so first (most common), then libutil.so.1,
+        // libc.so.6 (glibc), then libc.so (musl/ohos).
+        const lib_names = [_][:0]const u8{ "libutil.so", "libutil.so.1", "libc.so.6", "libc.so" };
         for (lib_names) |lib_name| {
             handle = bun.sys.dlopen(lib_name, .{ .LAZY = true });
             if (handle != null) return handle;
