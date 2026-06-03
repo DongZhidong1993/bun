@@ -861,9 +861,24 @@ fn get_open_pty_fn() -> Option<OpenPtyFn> {
         return Some(openpty);
     }
 
-    // On Linux, openpty is in libutil, which may not be linked
+    // OHOS: openpty is in libc (same as macOS), link directly
+    #[cfg(target_env = "ohos")]
+    {
+        unsafe extern "C" {
+            fn openpty(
+                amaster: *mut c_int,
+                aslave: *mut c_int,
+                name: *mut u8,
+                termp: *const OpenPtyTermios,
+                winp: *const Winsize,
+            ) -> c_int;
+        }
+        return Some(openpty);
+    }
+
+    // On Linux/Android, openpty is in libutil, which may not be linked
     // Load it dynamically via dlopen
-    #[cfg(any(target_os = "linux", target_os = "android", target_env = "ohos"))]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         return lib_util::get_open_pty();
     }

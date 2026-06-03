@@ -1054,27 +1054,26 @@ extern "C" const bool BUN_OHOS_DISABLE_PIDFD = false;
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <ucontext.h>
 
 static void ohos_sigsys_handler(int sig, siginfo_t* info, void* uctx) {
     (void)sig;
     (void)info;
-    (void)uctx;
-    // Read /proc/self/syscall to find which syscall was blocked.
+    // On OHOS, /proc/self/syscall may not be available.
+    // Instead, read the syscall number from the saved register state.
+    // On aarch64 Linux, the syscall number is in register x8 when `svc #0`
+    // is executed. The ucontext_t captures this before the signal.
     int syscall_nr = -1;
-    FILE* f = fopen("/proc/self/syscall", "r");
-    if (f) {
-        char buf[128] = {};
-        if (fgets(buf, sizeof(buf), f)) {
-            char* end = buf;
-            long val = strtol(buf, &end, 0);
-            if (end != buf) syscall_nr = (int)val;
-        }
-        fclose(f);
+    if (uctx) {
+        ucontext_t* uc = (ucontext_t*)uctx;
+#if defined(__aarch64__)
+        syscall_nr = (int)uc->uc_mcontext.regs[8];
+#elif defined(__x86_64__)
+        syscall_nr = (int)uc->uc_mcontext.gregs[REG_RAX];
+#endif
     }
     fprintf(stderr, "\n*** SIGSYS: blocked syscall #%d ***\n", syscall_nr);
     fflush(stderr);
-    // Returning from a SIGSYS handler lets the syscall fail with ENOSYS
-    // when seccomp uses SECCOMP_RET_TRAP (as OHOS does).
 }
 
 extern "C" void ohos_setup_sigsys_handler() {
