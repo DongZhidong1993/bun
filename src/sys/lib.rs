@@ -6217,8 +6217,35 @@ pub mod RTLD {
 
 /// sys.zig:4557 — `dlopen(filename, flags)`. Windows → `LoadLibraryA`.
 pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_env = "ohos")))]
     {
+        // SAFETY: filename is NUL-terminated.
+        let p = unsafe { libc::dlopen(filename.as_ptr(), flags) };
+        if p.is_null() { None } else { Some(p) }
+    }
+    #[cfg(target_env = "ohos")]
+    {
+        // OHOS: native .node/.so files must be signed to load.
+        // Check and auto-sign before dlopen.
+        fn ensure_signed(path: &ZStr) {
+            use std::process::Command;
+            // Safe: ZStr bytes are valid UTF-8 file paths
+            let path_str = path.as_cstr().to_str().unwrap_or("");
+            // Check if already signed via display-sign
+            let check = Command::new("binary-sign-tool")
+                .args(["display-sign", "-inFile", path_str])
+                .output();
+            let needs_sign = match &check {
+                Ok(out) => !out.status.success(),
+                Err(_) => true,
+            };
+            if needs_sign {
+                let _ = Command::new("binary-sign-tool")
+                    .args(["sign", "-selfSign", "1", "-inFile", path_str, "-outFile", path_str])
+                    .output();
+            }
+        }
+        ensure_signed(filename);
         // SAFETY: filename is NUL-terminated.
         let p = unsafe { libc::dlopen(filename.as_ptr(), flags) };
         if p.is_null() { None } else { Some(p) }
