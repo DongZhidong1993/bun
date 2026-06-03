@@ -1048,6 +1048,44 @@ extern "C" const bool BUN_OHOS_DISABLE_PIDFD = true;
 extern "C" const bool BUN_OHOS_DISABLE_PIDFD = false;
 #endif
 
+// OHOS SIGSYS handler — replaces uncatchable SIGSYS with a logged ENOSYS.
+#if defined(__OHOS__)
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static void ohos_sigsys_handler(int sig, siginfo_t* info, void* uctx) {
+    (void)sig;
+    (void)info;
+    (void)uctx;
+    // Read /proc/self/syscall to find which syscall was blocked.
+    int syscall_nr = -1;
+    FILE* f = fopen("/proc/self/syscall", "r");
+    if (f) {
+        char buf[128] = {};
+        if (fgets(buf, sizeof(buf), f)) {
+            char* end = buf;
+            long val = strtol(buf, &end, 0);
+            if (end != buf) syscall_nr = (int)val;
+        }
+        fclose(f);
+    }
+    fprintf(stderr, "\n*** SIGSYS: blocked syscall #%d ***\n", syscall_nr);
+    fflush(stderr);
+    // Returning from a SIGSYS handler lets the syscall fail with ENOSYS
+    // when seccomp uses SECCOMP_RET_TRAP (as OHOS does).
+}
+
+extern "C" void ohos_setup_sigsys_handler() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = ohos_sigsys_handler;
+    sigaction(SIGSYS, &sa, nullptr);
+}
+#endif
+
 #if OS(DARWIN)
 #include <os/signpost.h>
 #include "generated_perf_trace_events.h"

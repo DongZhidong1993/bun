@@ -3521,6 +3521,13 @@ mod posix_impl {
     /// [`can_use_memfd`] to false.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn memfd_create(name: &core::ffi::CStr, flags_: MemfdFlags) -> Maybe<Fd> {
+        // OHOS seccomp blocks memfd_create with uncatchable SIGSYS.
+        #[cfg(target_env = "ohos")]
+        {
+            let _ = (name, flags_);
+            MEMFD_ENOSYS.store(true, core::sync::atomic::Ordering::Relaxed);
+            return Err(Error::from_code_int(libc::ENOSYS, Tag::memfd_create));
+        }
         let mut flags: u32 = flags_ as u32;
         loop {
             // bionic only added the `memfd_create()` libc wrapper at API 30; we

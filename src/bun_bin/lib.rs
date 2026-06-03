@@ -176,6 +176,18 @@ pub unsafe extern "C" fn main(argc: c_int, argv: *const *const c_char) -> c_int 
         libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
     }
 
+    // OHOS: install a SIGSYS handler that logs the blocked syscall before
+    // exiting, instead of letting seccomp kill the process silently.
+    #[cfg(target_env = "ohos")]
+    {
+        extern "C" {
+            fn ohos_setup_sigsys_handler();
+        }
+        // SAFETY: called once on the main thread before any other thread
+        // is spawned; implemented in c-bindings.cpp.
+        unsafe { ohos_setup_sigsys_handler() };
+    }
+
     // main.zig:40-50 — Windows-only startup. Must run BEFORE the first libuv
     // call (uv allocator) and before anything reads `Bun.env`/`process.env`
     // (env conversion). The Zig spec orders these between sigaction and
