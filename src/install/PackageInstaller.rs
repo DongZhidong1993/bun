@@ -1781,6 +1781,15 @@ impl<'a> PackageInstaller<'a> {
                 }
             };
 
+            #[cfg(target_env = "ohos")]
+            if let package_install::InstallResult::Success = &install_result {
+                if let Ok(mut pkg_path) = AbsPath::from(self.node_modules.path.as_slice()) {
+                    if pkg_path.append(alias.slice(string_buf!())).is_ok() {
+                        ohos_sign_native_binaries(pkg_path.as_slice());
+                    }
+                }
+            }
+
             match install_result {
                 package_install::InstallResult::Success => {
                     let is_duplicate = self.successfully_installed.is_set(package_id as usize);
@@ -2355,6 +2364,55 @@ impl<'a> PackageInstaller<'a> {
             name,
             &resolutions[package_id as usize],
         );
+    }
+}
+
+// ───────────────────────────── OHOS install-time signing ─────────────────────────────
+
+/// On OHOS, scan a package directory for native binaries (.so, .node) and
+/// sign any that are not already signed. Called after a package is installed
+/// into node_modules, before lifecycle scripts run.
+#[cfg(target_env = "ohos")]
+fn ohos_sign_native_binaries(pkg_dir: &[u8]) {
+    use std::process::Command;
+
+    let dir = match Dir::open(pkg_dir) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let w = match Syscall::walker_skippable::walk(dir.fd(), &[], &[]) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    let mut w = w;
+    while let Ok(Some(entry)) = w.next() {
+        if entry.kind != Syscall::EntryKind::File {
+            continue;
+        }
+        let name = entry.basename.as_bytes();
+        let needs_sign = if name.len() > 3 {
+            name.ends_with(b".so") || name.ends_with(b".node")
+        } else {
+            false
+        };
+        if !needs_sign {
+            continue;
+        }
+        let mut full = Vec::with_capacity(pkg_dir.len() + 1 + name.len());
+        full.extend_from_slice(pkg_dir);
+        full.push(b'/');
+        full.extend_from_slice(name);
+        let full_str = unsafe { core::str::from_utf8_unchecked(&full) };
+        if Command::new("binary-sign-tool")
+            .args(["display-sign", "-inFile", full_str])
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            continue;
+        }
+        let _ = Command::new("binary-sign-tool")
+            .args(["sign", "-selfSign", "1", "-inFile", full_str, "-outFile", full_str])
+            .output();
     }
 }
 
