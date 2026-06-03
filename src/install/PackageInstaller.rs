@@ -1785,7 +1785,7 @@ impl<'a> PackageInstaller<'a> {
             if let package_install::InstallResult::Success = &install_result {
                 if let Ok(mut pkg_path) = AbsPath::from(self.node_modules.path.as_slice()) {
                     if pkg_path.append(alias.slice(string_buf!())).is_ok() {
-                        ohos_sign_native_binaries(pkg_path.as_slice());
+                        ohos_sign_native_binaries(pkg_path.slice());
                     }
                 }
             }
