@@ -3528,34 +3528,37 @@ mod posix_impl {
             MEMFD_ENOSYS.store(true, core::sync::atomic::Ordering::Relaxed);
             return Err(Error::from_code_int(libc::ENOSYS, Tag::memfd_create));
         }
-        let mut flags: u32 = flags_ as u32;
-        loop {
-            // bionic only added the `memfd_create()` libc wrapper at API 30; we
-            // link against API 28. Raw-syscall it (kernel has had it since 3.17).
-            // SAFETY: `name` is a valid NUL-terminated C string.
-            #[cfg(target_os = "android")]
-            let rc = unsafe {
-                libc::syscall(libc::SYS_memfd_create, name.as_ptr(), flags) as core::ffi::c_int
-            };
-            // SAFETY: `name` is a valid NUL-terminated C string.
-            #[cfg(target_os = "linux")]
-            let rc = unsafe { libc::memfd_create(name.as_ptr(), flags) };
-            if rc < 0 {
-                let e = last_errno();
-                if e == libc::EINTR {
-                    continue;
+        #[cfg(not(target_env = "ohos"))]
+        {
+            let mut flags: u32 = flags_ as u32;
+            loop {
+                // bionic only added the `memfd_create()` libc wrapper at API 30; we
+                // link against API 28. Raw-syscall it (kernel has had it since 3.17).
+                // SAFETY: `name` is a valid NUL-terminated C string.
+                #[cfg(target_os = "android")]
+                let rc = unsafe {
+                    libc::syscall(libc::SYS_memfd_create, name.as_ptr(), flags) as core::ffi::c_int
+                };
+                // SAFETY: `name` is a valid NUL-terminated C string.
+                #[cfg(target_os = "linux")]
+                let rc = unsafe { libc::memfd_create(name.as_ptr(), flags) };
+                if rc < 0 {
+                    let e = last_errno();
+                    if e == libc::EINTR {
+                        continue;
+                    }
+                    if e == libc::EINVAL && flags == flags_ as u32 {
+                        // MFD_EXEC / MFD_NOEXEC_SEAL require Linux 6.3.
+                        flags = flags_.older_kernel_flag();
+                        continue;
+                    }
+                    if e == libc::ENOSYS || e == libc::EPERM || e == libc::EACCES {
+                        MEMFD_ENOSYS.store(true, core::sync::atomic::Ordering::Relaxed);
+                    }
+                    return Err(Error::from_code_int(e, Tag::memfd_create));
                 }
-                if e == libc::EINVAL && flags == flags_ as u32 {
-                    // MFD_EXEC / MFD_NOEXEC_SEAL require Linux 6.3.
-                    flags = flags_.older_kernel_flag();
-                    continue;
-                }
-                if e == libc::ENOSYS || e == libc::EPERM || e == libc::EACCES {
-                    MEMFD_ENOSYS.store(true, core::sync::atomic::Ordering::Relaxed);
-                }
-                return Err(Error::from_code_int(e, Tag::memfd_create));
+                return Ok(Fd::from_native(rc));
             }
-            return Ok(Fd::from_native(rc));
         }
     }
 
