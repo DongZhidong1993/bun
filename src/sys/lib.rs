@@ -6234,7 +6234,8 @@ pub mod RTLD {
 fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c_void> {
     type DlopenNs = unsafe extern "C" fn(*const core::ffi::c_char, c_int, c_int) -> *mut c_void;
     // Try dlopen_ns first — exported from ld-musl-aarch64.so.1
-    let sym = unsafe { libc::dlsym(core::ptr::null_mut(), c"dlopen_ns".as_ptr()) };
+    // Use RTLD_DEFAULT (= -1 on musl, not 0!) to search all loaded libraries.
+    let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"dlopen_ns".as_ptr()) };
     if !sym.is_null() {
         let func: DlopenNs = unsafe { core::mem::transmute(sym) };
         let p = unsafe { func(path, flags, 0) };
