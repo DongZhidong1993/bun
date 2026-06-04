@@ -6278,7 +6278,8 @@ pub unsafe extern "C" fn Bun__dlopen(path: *const core::ffi::c_char, flags: i32)
         return core::ptr::null_mut();
     }
     // SAFETY: path is a valid NUL-terminated C string (caller contract).
-    let z = unsafe { ZStr::from_raw(path) };
+    let len = unsafe { libc::strlen(path) };
+    let z = unsafe { ZStr::from_raw(path.cast::<u8>(), len) };
     match dlopen(z, flags) {
         Some(h) => h,
         None => core::ptr::null_mut(),
