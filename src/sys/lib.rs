@@ -6226,50 +6226,24 @@ pub mod RTLD {
     pub const LOCAL: i32 = 0;
 }
 
-/// OHOS: Find `dlopen_impl` by reading libc's base address from /proc/self/maps
-/// and adding the known symbol offset. `dlsym(RTLD_DEFAULT)` won't work because
-/// bun is a static PIE and libc.so is not in the dynamic symbol search scope.
-#[cfg(target_env = "ohos")]
-fn ohos_find_dlopen_impl() -> Option<unsafe extern "C" fn(*const core::ffi::c_char, c_int, *const u8, *const u8, *const u8) -> *mut u8> {
-    // dlopen_impl offset in OHOS libc.so (from readelf)
-    const DLOPEN_IMPL_OFFSET: usize = 0xa4164;
-    // libc.so basename patterns
-    const LIBC_PATTERNS: &[&[u8]] = &[b"libc.so", b"libc-2", b"libc.musl"];
-
-    // Read /proc/self/maps to find libc base
-    let Ok(maps) = std::fs::read("/proc/self/maps") else { return None; };
-    let mut base: usize = 0;
-    for line in maps.split(|&b| b == b'\n') {
-        for pat in LIBC_PATTERNS {
-            if line.ends_with(pat) || line[..].windows(pat.len()).any(|w| w == *pat) {
-                // Line format: "base-end perm offset ... name"
-                if let Some(dash) = line.iter().position(|&b| b == b'-') {
-                    if let Ok(addr) = core::str::from_utf8(&line[..dash]).ok().and_then(|s| usize::from_str_radix(s, 16).ok()) {
-                        base = addr;
-                        break;
-                    }
-                }
-            }
-        }
-        if base != 0 { break; }
-    }
-    if base == 0 { return None; }
-
-    let func_ptr = (base + DLOPEN_IMPL_OFFSET) as *const u8;
-    if func_ptr.is_null() { return None; }
-    Some(unsafe { core::mem::transmute::<*const u8, _>(func_ptr) })
-}
-
-/// OHOS: Try libc's `dlopen_impl` via address lookup in /proc/self/maps.
+/// OHOS: dlopen via ld-musl's exported `dlopen_ns` function.
+/// ld-musl-aarch64.so.1 IS loaded in the process (it's the dynamic linker),
+/// so its symbols are reachable via dlsym(RTLD_DEFAULT).
+/// libc.so's `dlopen_impl` is NOT available because bun statically links musl.
 #[cfg(target_env = "ohos")]
 fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c_void> {
-    type F = unsafe extern "C" fn(*const core::ffi::c_char, c_int, *const u8, *const u8, *const u8) -> *mut u8;
-    if let Some(func) = ohos_find_dlopen_impl() {
-        let p = unsafe { func(path, flags, core::ptr::null(), c"dlopen".as_ptr().cast(), core::ptr::null()) };
+    type DlopenNs = unsafe extern "C" fn(*const core::ffi::c_char, c_int, c_int) -> *mut c_void;
+    // Try dlopen_ns first — exported from ld-musl-aarch64.so.1
+    let sym = unsafe { libc::dlsym(core::ptr::null_mut(), c"dlopen_ns".as_ptr()) };
+    if !sym.is_null() {
+        let func: DlopenNs = unsafe { core::mem::transmute(sym) };
+        let p = unsafe { func(path, flags, 0) };
         if !p.is_null() {
-            return Some(p.cast());
+            return Some(p);
         }
     }
+    // Try regular dlopen (our strong override — will call ohos_dlopen again,
+    // so check for recursion guard here).
     None
 }
 
