@@ -6261,12 +6261,12 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
         // OHOS's public dlopen is a thin security wrapper (144 bytes).
         // dlopen_impl is the real implementation (5132 bytes).
         // Try dlopen_impl first via dlsym(RTLD_DEFAULT) to bypass the check.
-        type DlopenImpl = unsafe extern "C" fn(*const core::ffi::c_char, c_int, c_int) -> *mut c_void;
-        let name = c"dlopen_impl";
-        let sym = unsafe { libc::dlsym(core::ptr::null_mut(), name.as_ptr()) };
+        // dlopen_impl signature: void *dlopen_impl(const char *, int, void *errinfo)
+        type DlopenImpl = unsafe extern "C" fn(*const core::ffi::c_char, c_int, *mut c_void) -> *mut c_void;
+        let sym = unsafe { libc::dlsym(core::ptr::null_mut(), c"dlopen_impl".as_ptr()) };
         if !sym.is_null() {
             let func: DlopenImpl = unsafe { core::mem::transmute(sym) };
-            let p = unsafe { func(filename.as_ptr(), flags, 0) };
+            let p = unsafe { func(filename.as_ptr(), flags, core::ptr::null_mut()) };
             if !p.is_null() {
                 return Some(p);
             }
