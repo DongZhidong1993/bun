@@ -312,6 +312,7 @@ JSC_DEFINE_CUSTOM_SETTER(Process_defaultSetter, (JSC::JSGlobalObject * globalObj
 }
 
 extern "C" bool Bun__resolveEmbeddedNodeFile(void*, BunString*);
+extern "C" void* Bun__dlopen(const char* path, int flags);
 #if OS(WINDOWS)
 extern "C" HMODULE Bun__LoadLibraryBunString(BunString*);
 #endif
@@ -532,8 +533,6 @@ JSC_DEFINE_HOST_FUNCTION(Process_functionDlopen, (JSC::JSGlobalObject * globalOb
 // On Windows, we use GetLastError() for error messages, so we can only delete after checking for errors
 #else
     CrashHandler__setDlOpenAction(utf8.data());
-    // Use Bun's dlopen wrapper so signing (OHOS) happens before system dlopen.
-    extern "C" void* Bun__dlopen(const char* path, int flags);
     void* handle = Bun__dlopen(utf8.data(), RTLD_LAZY);
     CrashHandler__setDlOpenAction(nullptr);
 
