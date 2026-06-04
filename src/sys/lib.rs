@@ -6226,6 +6226,23 @@ pub mod RTLD {
     pub const LOCAL: i32 = 0;
 }
 
+/// OHOS: Try libc's `dlopen_impl` directly, bypassing the security wrapper.
+/// dlopen_impl takes 5 args: {path, flags, errinfo, retaddr, extra}
+#[cfg(target_env = "ohos")]
+fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c_void> {
+    let sym = unsafe { libc::dlsym(core::ptr::null_mut(), c"dlopen_impl".as_ptr()) };
+    if !sym.is_null() {
+        type F = unsafe extern "C" fn(*const core::ffi::c_char, c_int, *const u8, *const u8, *const u8) -> *mut u8;
+        let func: F = unsafe { core::mem::transmute(sym) };
+        let p = unsafe { func(path, flags, core::ptr::null(), c"dlopen_impl".as_ptr().cast(), core::ptr::null()) };
+        if !p.is_null() {
+            return Some(p.cast());
+        }
+    }
+    // Fallback: direct libc call (resolves to bun's built-in WEAK stub on OHOS).
+    None
+}
+
 /// sys.zig:4557 — `dlopen(filename, flags)`. Windows → `LoadLibraryA`.
 pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
     #[cfg(all(unix, not(target_env = "ohos")))]
@@ -6236,52 +6253,22 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
     }
     #[cfg(target_env = "ohos")]
     {
-        // OHOS: native .node/.so files must be signed to load.
-        // Check and auto-sign before dlopen.
         fn ensure_signed(path: &ZStr) {
             use std::process::Command;
-            // Safe: ZStr bytes are valid UTF-8 file paths
             let path_str = path.as_cstr().to_str().unwrap_or("");
-            // Check if already signed via display-sign
-            let check = Command::new("binary-sign-tool")
+            if Command::new("binary-sign-tool")
                 .args(["display-sign", "-inFile", path_str])
-                .output();
-            let needs_sign = match &check {
-                Ok(out) => !out.status.success(),
-                Err(_) => true,
-            };
-            if needs_sign {
-                let _ = Command::new("binary-sign-tool")
-                    .args(["sign", "-selfSign", "1", "-inFile", path_str, "-outFile", path_str])
-                    .output();
+                .output()
+                .is_ok_and(|o| o.status.success())
+            {
+                return;
             }
+            let _ = Command::new("binary-sign-tool")
+                .args(["sign", "-selfSign", "1", "-inFile", path_str, "-outFile", path_str])
+                .output();
         }
         ensure_signed(filename);
-
-        // OHOS's public dlopen is a thin security wrapper (144 bytes).
-        // dlopen_impl is the real implementation (5132 bytes).
-        // Try dlopen_impl first via dlsym(RTLD_DEFAULT) to bypass the check.
-        // dlopen passes 5 args to dlopen_impl:
-        //   x0 = path, x1 = flags, x2 = errinfo, x3 = ret addr, x4 = extra
-        type DlopenImpl = unsafe extern "C" fn(
-            *const core::ffi::c_char, c_int, *const u8, *const u8, *const u8,
-        ) -> *mut u8;
-        let sym = unsafe { libc::dlsym(core::ptr::null_mut(), c"dlopen_impl".as_ptr()) };
-        if !sym.is_null() {
-            let func: DlopenImpl = unsafe { core::mem::transmute(sym) };
-            let p = unsafe { func(
-                filename.as_ptr(), flags, core::ptr::null(),
-                c"dlopen_impl".as_ptr().cast::<u8>(), core::ptr::null(),
-            ) };
-            if !p.is_null() {
-                return Some(p.cast());
-            }
-        }
-
-        // Fallback: normal dlopen.
-        // SAFETY: filename is NUL-terminated.
-        let p = unsafe { libc::dlopen(filename.as_ptr(), flags) };
-        if p.is_null() { None } else { Some(p) }
+        ohos_dlopen_impl(filename.as_ptr(), flags)
     }
     #[cfg(windows)]
     {
@@ -6291,6 +6278,34 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
         if p.is_null() { None } else { Some(p.cast()) }
     }
 }
+// OHOS: bun is statically linked with musl, which provides a WEAK
+// `stub_dlopen` (always returns "Dynamic loading not supported").
+// Override it with a strong `dlopen` that signs the file and calls
+// libc's `dlopen_impl` directly.
+#[cfg(target_env = "ohos")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dlopen(path: *const core::ffi::c_char, flags: i32) -> *mut c_void {
+    use std::process::Command;
+    if path.is_null() {
+        return core::ptr::null_mut();
+    }
+    let path_str = unsafe { core::str::from_utf8_unchecked(
+        core::slice::from_raw_parts(path.cast::<u8>(), libc::strlen(path)),
+    )};
+    // Sign first
+    if !Command::new("binary-sign-tool")
+        .args(["display-sign", "-inFile", path_str])
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        let _ = Command::new("binary-sign-tool")
+            .args(["sign", "-selfSign", "1", "-inFile", path_str, "-outFile", path_str])
+            .output();
+    }
+    // Call dlopen_impl
+    ohos_dlopen_impl(path, flags).unwrap_or(core::ptr::null_mut())
+}
+
 /// C-ABI wrapper so `BunProcess.cpp` (process.dlopen) routes through
 /// `sys::dlopen()` instead of calling `libc::dlopen()` directly.
 /// On OHOS this ensures the file is signed before loading.
