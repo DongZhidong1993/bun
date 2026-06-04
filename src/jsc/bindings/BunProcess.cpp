@@ -532,7 +532,9 @@ JSC_DEFINE_HOST_FUNCTION(Process_functionDlopen, (JSC::JSGlobalObject * globalOb
 // On Windows, we use GetLastError() for error messages, so we can only delete after checking for errors
 #else
     CrashHandler__setDlOpenAction(utf8.data());
-    void* handle = dlopen(utf8.data(), RTLD_LAZY);
+    // Use Bun's dlopen wrapper so signing (OHOS) happens before system dlopen.
+    extern "C" void* Bun__dlopen(const char* path, int flags);
+    void* handle = Bun__dlopen(utf8.data(), RTLD_LAZY);
     CrashHandler__setDlOpenAction(nullptr);
 
     tryToDeleteIfNecessary();

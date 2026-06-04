@@ -6269,6 +6269,22 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
         if p.is_null() { None } else { Some(p.cast()) }
     }
 }
+/// C-ABI wrapper so `BunProcess.cpp` (process.dlopen) routes through
+/// `sys::dlopen()` instead of calling `libc::dlopen()` directly.
+/// On OHOS this ensures the file is signed before loading.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Bun__dlopen(path: *const core::ffi::c_char, flags: i32) -> *mut c_void {
+    if path.is_null() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: path is a valid NUL-terminated C string (caller contract).
+    let z = unsafe { ZStr::from_raw(path) };
+    match dlopen(z, flags) {
+        Some(h) => h,
+        None => core::ptr::null_mut(),
+    }
+}
+
 /// sys.zig:4565 — `dlsym(handle, name)`.
 pub fn dlsym_impl(handle: Option<*mut c_void>, name: &ZStr) -> Option<*mut c_void> {
     #[cfg(unix)]
