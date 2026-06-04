@@ -6283,8 +6283,8 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
 // Override it with a strong `dlopen` that signs the file and calls
 // libc's `dlopen_impl` directly.
 #[cfg(target_env = "ohos")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dlopen(path: *const core::ffi::c_char, flags: i32) -> *mut c_void {
+#[unsafe(export_name = "dlopen")]
+pub unsafe extern "C" fn ohos_dlopen(path: *const core::ffi::c_char, flags: i32) -> *mut c_void {
     use std::process::Command;
     if path.is_null() {
         return core::ptr::null_mut();
