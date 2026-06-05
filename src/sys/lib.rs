@@ -6320,18 +6320,16 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
         if p.is_null() { None } else { Some(p.cast()) }
     }
 }
-// OHOS: override musl's WEAK stub_dlopen with a strong symbol that routes
-// through ohos_dlopen_impl (ld-musl's dlopen_ns via base+offset).
-// No signing here — signing lives in sys::dlopen() (the Rust internal path).
-// std::process::Command inside dlopen would cause recursive dlopen calls.
-#[cfg(target_env = "ohos")]
-#[unsafe(export_name = "dlopen")]
-pub unsafe extern "C" fn ohos_dlopen(path: *const core::ffi::c_char, flags: i32) -> *mut c_void {
-    if path.is_null() {
-        return core::ptr::null_mut();
-    }
-    ohos_dlopen_impl(path, flags).unwrap_or(core::ptr::null_mut())
-}
+// OHOS: we do NOT globally override dlopen with a strong symbol.
+// Musl's WEAK stub_dlopen is intentionally always-errors at startup to
+// prevent arbitrary runtime code loading. Overriding it causes crashes
+// during early init (dlopen_ns recursively calls dlopen internally).
+// Instead, route process.dlopen through Bun__dlopen → sys::dlopen() →
+// ohos_dlopen_impl, which is only called from bun-controlled code paths.
+//
+// Only process.dlopen (and by extension Bun.FFI.dlopen) need this fix.
+// All other internal dlopen calls (NSS, locale, etc.) remain WEAK-stubbed
+// and return "not supported", matching OHOS's security model.
 
 /// C-ABI wrapper so `BunProcess.cpp` (process.dlopen) routes through
 /// `sys::dlopen()` instead of calling `libc::dlopen()` directly.
