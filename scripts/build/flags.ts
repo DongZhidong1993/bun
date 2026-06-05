@@ -1196,9 +1196,10 @@ export const linkerFlags: Flag[] = [
       "-lc++",
       "-lc++abi",
       "-lunwind",
+      "-lc",
     ].filter(f => f !== ""),
     when: c => c.ohos,
-    desc: "OHOS: link LLVM 22 libc++ + libc++abi + libunwind",
+    desc: "OHOS: link LLVM 22 libc++ + libc++abi + libunwind + dynamic libc",
   },
   {
     flag: [
