@@ -6260,17 +6260,15 @@ fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c
     unsafe { libc::close(fd); };
 
     let maps = &buf[..n];
-    let base = maps.windows(b"ld-musl".len()).position(|w| w == b"ld-musl")
-        .and_then(|pos| {
-            // Walk backwards to find the hex address before the first '-'
-            let line_start = maps[..pos].rposition(|&b| b == b'\n').unwrap_or(0);
-            let mut line_end = maps[pos..].iter().position(|&b| b == b'\n').unwrap_or(maps.len() - pos);
-            let line = &maps[line_start..pos + line_end];
-            let dash = line.iter().position(|&b| b == b'-')?;
-            let addr_str = &line[..dash];
-            core::str::from_utf8(addr_str).ok()
+    // Find ld-musl line and extract base address
+    let maps_str = core::str::from_utf8(maps).ok()?;
+    let base = maps_str.lines().find_map(|line| {
+        if line.contains("ld-musl") {
+            line.split('-').next()?
+                .split(' ').next()
                 .and_then(|s| usize::from_str_radix(s, 16).ok())
-        })?;
+        } else { None }
+    })?;
     let func_ptr = (base + DLOPEN_NS_OFFSET) as *const ();
     type DlopenNs = unsafe extern "C" fn(*const core::ffi::c_char, c_int, c_int) -> *mut c_void;
     let func: DlopenNs = unsafe { core::mem::transmute(func_ptr) };
