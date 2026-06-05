@@ -6244,6 +6244,16 @@ pub mod RTLD {
 /// recursive dlopen calls during process startup.
 #[cfg(target_env = "ohos")]
 fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c_void> {
+    // Recursion guard: dlopen_ns may call dlopen internally
+    static RECURSING: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    if RECURSING.swap(true, core::sync::atomic::Ordering::AcqRel) {
+        return None;
+    }
+    let _guard = scopeguard::guard((), |_| {
+        RECURSING.store(false, core::sync::atomic::Ordering::Release);
+    });
+
     const DLOPEN_NS_OFFSET: usize = 0xa8608;
     // Read /proc/self/maps using raw syscalls to avoid std:: alloc recursion
     let fd = match unsafe {
@@ -6258,7 +6268,6 @@ fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c
         n => n as usize,
     };
     unsafe { libc::close(fd); };
-
     let maps = &buf[..n];
     // Find ld-musl line and extract base address
     let maps_str = core::str::from_utf8(maps).ok()?;
