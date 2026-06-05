@@ -6226,26 +6226,26 @@ pub mod RTLD {
     pub const LOCAL: i32 = 0;
 }
 
-/// OHOS: dlopen via ld-musl's exported `dlopen_ns` function.
-/// ld-musl-aarch64.so.1 IS loaded in the process (it's the dynamic linker),
-/// so its symbols are reachable via dlsym(RTLD_DEFAULT).
-/// libc.so's `dlopen_impl` is NOT available because bun statically links musl.
+/// OHOS: call `dlopen_ns` from ld-musl-aarch64.so.1 by reading its base address
+/// from /proc/self/maps and adding the known symbol offset.
+/// dlsym() can't find ld-musl's symbols because OHOS restricts the search scope.
 #[cfg(target_env = "ohos")]
 fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c_void> {
+    // dlopen_ns offset in ld-musl-aarch64.so.1 (from readelf .symtab/.dynsym)
+    const DLOPEN_NS_OFFSET: usize = 0xa8608;
+    // Parse /proc/self/maps to find ld-musl base address
+    let Ok(maps) = std::fs::read_to_string("/proc/self/maps") else { return None; };
+    let base = maps.lines().find_map(|line| {
+        if line.contains("ld-musl") {
+            line.split('-').next()?.split(' ').next()
+                .and_then(|s| usize::from_str_radix(s, 16).ok())
+        } else { None }
+    })?;
+    let func_ptr = (base + DLOPEN_NS_OFFSET) as *const ();
     type DlopenNs = unsafe extern "C" fn(*const core::ffi::c_char, c_int, c_int) -> *mut c_void;
-    // Try dlopen_ns first — exported from ld-musl-aarch64.so.1
-    // Use RTLD_DEFAULT (= -1 on musl, not 0!) to search all loaded libraries.
-    let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"dlopen_ns".as_ptr()) };
-    if !sym.is_null() {
-        let func: DlopenNs = unsafe { core::mem::transmute(sym) };
-        let p = unsafe { func(path, flags, 0) };
-        if !p.is_null() {
-            return Some(p);
-        }
-    }
-    // Try regular dlopen (our strong override — will call ohos_dlopen again,
-    // so check for recursion guard here).
-    None
+    let func: DlopenNs = unsafe { core::mem::transmute(func_ptr) };
+    let p = unsafe { func(path, flags, 0) };
+    if p.is_null() { None } else { Some(p) }
 }
 
 /// sys.zig:4557 — `dlopen(filename, flags)`. Windows → `LoadLibraryA`.
