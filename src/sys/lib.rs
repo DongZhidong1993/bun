@@ -6238,53 +6238,6 @@ pub mod RTLD {
     pub const LOCAL: i32 = 0;
 }
 
-/// OHOS: call `dlopen_ns` from ld-musl-aarch64.so.1 by reading its base address
-/// from /proc/self/maps and adding the known symbol offset.
-/// Uses raw syscalls (open/read) — no std:: allocations that could trigger
-/// recursive dlopen calls during process startup.
-#[cfg(target_env = "ohos")]
-fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c_void> {
-    // Recursion guard: dlopen_ns may call dlopen internally
-    static RECURSING: core::sync::atomic::AtomicBool =
-        core::sync::atomic::AtomicBool::new(false);
-    if RECURSING.swap(true, core::sync::atomic::Ordering::AcqRel) {
-        return None;
-    }
-    let _guard = scopeguard::guard((), |_| {
-        RECURSING.store(false, core::sync::atomic::Ordering::Release);
-    });
-
-    const DLOPEN_NS_OFFSET: usize = 0xa8608;
-    // Read /proc/self/maps using raw syscalls to avoid std:: alloc recursion
-    let fd = match unsafe {
-        libc::open(c"/proc/self/maps".as_ptr(), libc::O_RDONLY)
-    } {
-        -1 => return None,
-        f => f,
-    };
-    let mut buf = [0u8; 4096];
-    let n = match unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) } {
-        -1 => { unsafe { libc::close(fd); }; return None; }
-        n => n as usize,
-    };
-    unsafe { libc::close(fd); };
-    let maps = &buf[..n];
-    // Find ld-musl line and extract base address
-    let maps_str = core::str::from_utf8(maps).ok()?;
-    let base = maps_str.lines().find_map(|line| {
-        if line.contains("ld-musl") {
-            line.split('-').next()?
-                .split(' ').next()
-                .and_then(|s| usize::from_str_radix(s, 16).ok())
-        } else { None }
-    })?;
-    let func_ptr = (base + DLOPEN_NS_OFFSET) as *const ();
-    type DlopenNs = unsafe extern "C" fn(*const core::ffi::c_char, c_int, c_int) -> *mut c_void;
-    let func: DlopenNs = unsafe { core::mem::transmute(func_ptr) };
-    let p = unsafe { func(path, flags, 0) };
-    if p.is_null() { None } else { Some(p) }
-}
-
 /// sys.zig:4557 — `dlopen(filename, flags)`. Windows → `LoadLibraryA`.
 pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
     #[cfg(all(unix, not(target_env = "ohos")))]
@@ -6310,7 +6263,9 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
                 .output();
         }
         ensure_signed(filename);
-        ohos_dlopen_impl(filename.as_ptr(), flags)
+        // SAFETY: filename is NUL-terminated.
+        let p = unsafe { libc::dlopen(filename.as_ptr(), flags) };
+        if p.is_null() { None } else { Some(p) }
     }
     #[cfg(windows)]
     {
@@ -6320,17 +6275,6 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
         if p.is_null() { None } else { Some(p.cast()) }
     }
 }
-// OHOS: we do NOT globally override dlopen with a strong symbol.
-// Musl's WEAK stub_dlopen is intentionally always-errors at startup to
-// prevent arbitrary runtime code loading. Overriding it causes crashes
-// during early init (dlopen_ns recursively calls dlopen internally).
-// Instead, route process.dlopen through Bun__dlopen → sys::dlopen() →
-// ohos_dlopen_impl, which is only called from bun-controlled code paths.
-//
-// Only process.dlopen (and by extension Bun.FFI.dlopen) need this fix.
-// All other internal dlopen calls (NSS, locale, etc.) remain WEAK-stubbed
-// and return "not supported", matching OHOS's security model.
-
 /// C-ABI wrapper so `BunProcess.cpp` (process.dlopen) routes through
 /// `sys::dlopen()` instead of calling `libc::dlopen()` directly.
 /// On OHOS this ensures the file is signed before loading.
