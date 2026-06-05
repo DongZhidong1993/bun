@@ -6240,19 +6240,37 @@ pub mod RTLD {
 
 /// OHOS: call `dlopen_ns` from ld-musl-aarch64.so.1 by reading its base address
 /// from /proc/self/maps and adding the known symbol offset.
-/// dlsym() can't find ld-musl's symbols because OHOS restricts the search scope.
+/// Uses raw syscalls (open/read) — no std:: allocations that could trigger
+/// recursive dlopen calls during process startup.
 #[cfg(target_env = "ohos")]
 fn ohos_dlopen_impl(path: *const core::ffi::c_char, flags: i32) -> Option<*mut c_void> {
-    // dlopen_ns offset in ld-musl-aarch64.so.1 (from readelf .symtab/.dynsym)
     const DLOPEN_NS_OFFSET: usize = 0xa8608;
-    // Parse /proc/self/maps to find ld-musl base address
-    let Ok(maps) = std::fs::read_to_string("/proc/self/maps") else { return None; };
-    let base = maps.lines().find_map(|line| {
-        if line.contains("ld-musl") {
-            line.split('-').next()?.split(' ').next()
+    // Read /proc/self/maps using raw syscalls to avoid std:: alloc recursion
+    let fd = match unsafe {
+        libc::open(c"/proc/self/maps".as_ptr(), libc::O_RDONLY)
+    } {
+        -1 => return None,
+        f => f,
+    };
+    let mut buf = [0u8; 4096];
+    let n = match unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) } {
+        -1 => { unsafe { libc::close(fd); }; return None; }
+        n => n as usize,
+    };
+    unsafe { libc::close(fd); };
+
+    let maps = &buf[..n];
+    let base = maps.windows(b"ld-musl".len()).position(|w| w == b"ld-musl")
+        .and_then(|pos| {
+            // Walk backwards to find the hex address before the first '-'
+            let line_start = maps[..pos].rposition(|&b| b == b'\n').unwrap_or(0);
+            let mut line_end = maps[pos..].iter().position(|&b| b == b'\n').unwrap_or(maps.len() - pos);
+            let line = &maps[line_start..pos + line_end];
+            let dash = line.iter().position(|&b| b == b'-')?;
+            let addr_str = &line[..dash];
+            core::str::from_utf8(addr_str).ok()
                 .and_then(|s| usize::from_str_radix(s, 16).ok())
-        } else { None }
-    })?;
+        })?;
     let func_ptr = (base + DLOPEN_NS_OFFSET) as *const ();
     type DlopenNs = unsafe extern "C" fn(*const core::ffi::c_char, c_int, c_int) -> *mut c_void;
     let func: DlopenNs = unsafe { core::mem::transmute(func_ptr) };
