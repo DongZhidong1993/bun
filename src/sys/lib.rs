@@ -6295,31 +6295,16 @@ pub fn dlopen(filename: &ZStr, flags: i32) -> Option<*mut c_void> {
         if p.is_null() { None } else { Some(p.cast()) }
     }
 }
-// OHOS: bun is statically linked with musl, which provides a WEAK
-// `stub_dlopen` (always returns "Dynamic loading not supported").
-// Override it with a strong `dlopen` that signs the file and calls
-// libc's `dlopen_impl` directly.
+// OHOS: override musl's WEAK stub_dlopen with a strong symbol that routes
+// through ohos_dlopen_impl (ld-musl's dlopen_ns via base+offset).
+// No signing here — signing lives in sys::dlopen() (the Rust internal path).
+// std::process::Command inside dlopen would cause recursive dlopen calls.
 #[cfg(target_env = "ohos")]
 #[unsafe(export_name = "dlopen")]
 pub unsafe extern "C" fn ohos_dlopen(path: *const core::ffi::c_char, flags: i32) -> *mut c_void {
-    use std::process::Command;
     if path.is_null() {
         return core::ptr::null_mut();
     }
-    let path_str = unsafe { core::str::from_utf8_unchecked(
-        core::slice::from_raw_parts(path.cast::<u8>(), libc::strlen(path)),
-    )};
-    // Sign first
-    if !Command::new("binary-sign-tool")
-        .args(["display-sign", "-inFile", path_str])
-        .output()
-        .is_ok_and(|o| o.status.success())
-    {
-        let _ = Command::new("binary-sign-tool")
-            .args(["sign", "-selfSign", "1", "-inFile", path_str, "-outFile", path_str])
-            .output();
-    }
-    // Call dlopen_impl
     ohos_dlopen_impl(path, flags).unwrap_or(core::ptr::null_mut())
 }
 
