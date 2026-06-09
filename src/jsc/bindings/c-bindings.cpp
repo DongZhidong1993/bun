@@ -594,8 +594,11 @@ extern "C" int32_t bun_is_stdio_null[3] = { 0, 0, 0 };
 extern "C" void bun_initialize_process()
 {
     // Disable printf() buffering. We buffer it ourselves.
-    setvbuf(stdout, nullptr, _IONBF, 0);
-    setvbuf(stderr, nullptr, _IONBF, 0);
+    // Guard: on some platforms (notably HarmonyOS/HiShell raw ELF launch),
+    // stdout/stderr FILE* may be NULL before the fd fixup below.
+    // HarmonyOS musl aborts on setvbuf(NULL, ...).
+    if (stdout) setvbuf(stdout, nullptr, _IONBF, 0);
+    if (stderr) setvbuf(stderr, nullptr, _IONBF, 0);
 
 #if OS(LINUX) && !defined(__OHOS__)
     // Prevent leaking inherited file descriptors on Linux
