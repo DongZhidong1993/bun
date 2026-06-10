@@ -593,9 +593,12 @@ extern "C" int32_t bun_is_stdio_null[3] = { 0, 0, 0 };
 
 extern "C" void bun_initialize_process()
 {
-    // Disable printf() buffering. We buffer it ourselves.
-    setvbuf(stdout, nullptr, _IONBF, 0);
-    setvbuf(stderr, nullptr, _IONBF, 0);
+#if defined(__OHOS__)
+    {
+        static const char msg[] = "[bun-init] bun_initialize_process() entered\n";
+        (void)write(2, msg, sizeof(msg) - 1);
+    }
+#endif
 
 #if OS(LINUX) && !defined(__OHOS__)
     // Prevent leaking inherited file descriptors on Linux
@@ -660,6 +663,19 @@ extern "C" void bun_initialize_process()
         close(devNullFd_);
     }
 
+#if defined(__OHOS__)
+    {
+        char buf[128];
+        int len = snprintf(buf, sizeof(buf),
+            "[bun-init] fd validation done: stdin=%s stdout=%s stderr=%s anyTTY=%d\n",
+            bun_is_stdio_null[0] ? "null" : "ok",
+            bun_is_stdio_null[1] ? "null" : "ok",
+            bun_is_stdio_null[2] ? "null" : "ok",
+            (int)anyTTYs);
+        if (len > 0) write(2, buf, (size_t)len);
+    }
+#endif
+
     // Restore TTY state on exit
     if (anyTTYs) {
         struct sigaction sa;
@@ -711,10 +727,51 @@ extern "C" void bun_initialize_process()
     Bun__setCTRLHandler(1);
 #endif
 
+    // Disable printf() buffering. We buffer it ourselves.
+    // Guard against NULL FILE*: on musl-based libc (e.g. OHOS/HarmonyOS),
+    // stdout/stderr can be NULL when fd 1/2 was not open at libc init time.
+    // The fd validation above guarantees fds 0-2 are valid (backed by
+    // /dev/null if necessary), but the musl FILE* object may still be NULL
+    // if it was never initialized. In that case, setvbuf would dereference
+    // a null pointer and abort. Since Bun's primary output path uses direct
+    // write() syscalls, skipping setvbuf for a NULL FILE* is safe.
+    if (stdout) {
+        setvbuf(stdout, nullptr, _IONBF, 0);
+    } else {
+        // Exception: stdout FILE* is NULL — use write(2,...) for diagnostics.
+        static const char msg[] = "[bun] WARNING: stdout FILE* is NULL, setvbuf skipped (OHOS/musl)\n";
+        (void)write(2, msg, sizeof(msg) - 1);
+    }
+    if (stderr) {
+        setvbuf(stderr, nullptr, _IONBF, 0);
+    } else {
+        // Exception: stderr FILE* is NULL — use write(2,...) for diagnostics.
+        static const char msg[] = "[bun] WARNING: stderr FILE* is NULL, setvbuf skipped (OHOS/musl)\n";
+        (void)write(2, msg, sizeof(msg) - 1);
+    }
+
+#if defined(__OHOS__)
+    {
+        char buf[128];
+        int len = snprintf(buf, sizeof(buf),
+            "[bun-init] setvbuf done: stdout=%s stderr=%s\n",
+            stdout ? "non-NULL" : "NULL",
+            stderr ? "non-NULL" : "NULL");
+        if (len > 0) write(2, buf, (size_t)len);
+    }
+#endif
+
 #if OS(DARWIN) || ASAN_ENABLED
     atexit(Bun__onExit);
 #elif !OS(WINDOWS)
     at_quick_exit(Bun__onExit);
+#endif
+
+#if defined(__OHOS__)
+    {
+        static const char msg[] = "[bun-init] bun_initialize_process() completed\n";
+        (void)write(2, msg, sizeof(msg) - 1);
+    }
 #endif
 }
 
@@ -790,8 +847,32 @@ extern "C" void Bun__disableSOLinger(SOCKET fd)
 
 #endif
 
+// ffi_* stdio wrappers — NULL-safe for musl-based libc (e.g. OHOS) where
+// stdout/stderr FILE* can be NULL. When stream/file is NULL, write/read
+// functions return an error (-1/EOF), query functions return a safe default.
+
+// One-shot diagnostic: logs the first time a NULL FILE* is encountered in
+// any ffi_* wrapper. Uses write(2,...) since stderr FILE* may itself be NULL.
+static void bun_log_null_stdio_once(const char* func_name)
+{
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        // Write a fixed-prefix message + the function name.
+        const char prefix[] = "[bun] WARNING: NULL FILE* in ";
+        const char suffix[] = " (OHOS/musl stdio not initialized)\n";
+        (void)write(2, prefix, sizeof(prefix) - 1);
+        // Write func_name up to a reasonable length.
+        size_t len = 0;
+        while (func_name[len] && len < 64) len++;
+        (void)write(2, func_name, len);
+        (void)write(2, suffix, sizeof(suffix) - 1);
+    }
+}
+
 extern "C" int ffi_vprintf(const char* fmt, va_list ap)
 {
+    if (!stderr) { bun_log_null_stdio_once("ffi_vprintf"); return -1; }
     int ret = vfprintf(stderr, fmt, ap);
     fflush(stderr);
     return ret;
@@ -799,6 +880,7 @@ extern "C" int ffi_vprintf(const char* fmt, va_list ap)
 
 extern "C" int ffi_vfprintf(FILE* stream, const char* fmt, va_list ap)
 {
+    if (!stream) { bun_log_null_stdio_once("ffi_vfprintf"); return -1; }
     int ret = vfprintf(stream, fmt, ap);
     fflush(stream);
     return ret;
@@ -806,6 +888,7 @@ extern "C" int ffi_vfprintf(FILE* stream, const char* fmt, va_list ap)
 
 extern "C" int ffi_printf(const char* __restrict fmt, ...)
 {
+    if (!stdout) { bun_log_null_stdio_once("ffi_printf"); return -1; }
     va_list ap;
     va_start(ap, fmt);
     int r = vprintf(fmt, ap);
@@ -816,6 +899,7 @@ extern "C" int ffi_printf(const char* __restrict fmt, ...)
 
 extern "C" int ffi_fprintf(FILE* stream, const char* fmt, ...)
 {
+    if (!stream) { bun_log_null_stdio_once("ffi_fprintf"); return -1; }
     va_list ap;
     va_start(ap, fmt);
     int r = vfprintf(stream, fmt, ap);
@@ -826,6 +910,7 @@ extern "C" int ffi_fprintf(FILE* stream, const char* fmt, ...)
 
 extern "C" int ffi_scanf(const char* fmt, ...)
 {
+    if (!stdin) { bun_log_null_stdio_once("ffi_scanf"); return EOF; }
     va_list ap;
     va_start(ap, fmt);
     int r = vscanf(fmt, ap);
@@ -835,6 +920,7 @@ extern "C" int ffi_scanf(const char* fmt, ...)
 
 extern "C" int ffi_fscanf(FILE* stream, const char* fmt, ...)
 {
+    if (!stream) { bun_log_null_stdio_once("ffi_fscanf"); return EOF; }
     va_list ap;
     va_start(ap, fmt);
     int r = vfscanf(stream, fmt, ap);
@@ -867,46 +953,57 @@ extern "C" FILE* ffi_fopen(const char* path, const char* mode)
 
 extern "C" int ffi_fclose(FILE* file)
 {
+    if (!file) { bun_log_null_stdio_once("ffi_fclose"); return 0; }
     return fclose(file);
 }
 
 extern "C" int ffi_fgetc(FILE* file)
 {
+    if (!file) { bun_log_null_stdio_once("ffi_fgetc"); return EOF; }
     return fgetc(file);
 }
 
 extern "C" int ffi_fputc(int c, FILE* file)
 {
+    if (!file) { bun_log_null_stdio_once("ffi_fputc"); return EOF; }
     return fputc(c, file);
 }
 
 extern "C" int ffi_ungetc(int c, FILE* file)
 {
+    if (!file) { bun_log_null_stdio_once("ffi_ungetc"); return EOF; }
     return ungetc(c, file);
 }
 
 extern "C" int ffi_feof(FILE* file)
 {
+    // NULL stream treated as EOF — no more data available.
+    if (!file) { bun_log_null_stdio_once("ffi_feof"); return 1; }
     return feof(file);
 }
 
 extern "C" int ffi_fseek(FILE* file, long offset, int whence)
 {
+    if (!file) { bun_log_null_stdio_once("ffi_fseek"); return -1; }
     return fseek(file, offset, whence);
 }
 
 extern "C" long ffi_ftell(FILE* file)
 {
+    if (!file) { bun_log_null_stdio_once("ffi_ftell"); return -1L; }
     return ftell(file);
 }
 
 extern "C" int ffi_fflush(FILE* file)
 {
+    // fflush(NULL) flushes all streams per POSIX; preserve that behavior.
+    if (file == nullptr) return fflush(nullptr);
     return fflush(file);
 }
 
 extern "C" int ffi_fileno(FILE* file)
 {
+    if (!file) { bun_log_null_stdio_once("ffi_fileno"); return -1; }
     return fileno(file);
 }
 
@@ -1070,8 +1167,12 @@ static void ohos_sigsys_handler(int sig, siginfo_t* info, void* uctx) {
         syscall_nr = (int)uc->uc_mcontext.gregs[REG_RAX];
 #endif
     }
-    fprintf(stderr, "\n*** SIGSYS: blocked syscall #%d ***\n", syscall_nr);
-    fflush(stderr);
+    // Use write(fd, ...) directly instead of fprintf(stderr, ...) — stderr
+    // FILE* can be NULL on OHOS musl. fd 2 is guaranteed valid by
+    // bun_initialize_process(). write() is async-signal-safe.
+    char msg[96];
+    int len = snprintf(msg, sizeof(msg), "\n*** SIGSYS: blocked syscall #%d ***\n", syscall_nr);
+    if (len > 0) write(2, msg, (size_t)len);
 }
 
 extern "C" void ohos_setup_sigsys_handler() {
@@ -1080,6 +1181,11 @@ extern "C" void ohos_setup_sigsys_handler() {
     sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = ohos_sigsys_handler;
     sigaction(SIGSYS, &sa, nullptr);
+
+    {
+        static const char msg[] = "[bun-init] ohos_setup_sigsys_handler() installed SIGSYS handler\n";
+        (void)write(2, msg, sizeof(msg) - 1);
+    }
 }
 #endif
 

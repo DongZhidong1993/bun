@@ -1753,6 +1753,16 @@ JSC_DEFINE_HOST_FUNCTION(Process_functionExecve, (JSGlobalObject * lexicalGlobal
         return {};
     }
 
+#if defined(__OHOS__)
+    {
+        char buf[256];
+        int len = snprintf(buf, sizeof(buf),
+            "[bun-execve] about to execve: path=%s argc=%d\n",
+            execPathUtf8.data(), (int)argvStorage.size());
+        if (len > 0) write(2, buf, (size_t)(len < (int)sizeof(buf) ? len : (int)sizeof(buf) - 1));
+    }
+#endif
+
     int savedErrno;
 
 #if OS(DARWIN)
@@ -1820,10 +1830,24 @@ JSC_DEFINE_HOST_FUNCTION(Process_functionExecve, (JSGlobalObject * lexicalGlobal
     // state to return to JavaScript).
     const char* errName = Bun__errnoName(savedErrno);
 
-    fprintf(stderr, "process.execve failed with error code %s\n", errName ? errName : "UNKNOWN");
-    fprintf(stderr, "SystemError [process.execve]: execve %s: %s\n", strerror(savedErrno), execPathUtf8.data());
-    fprintf(stderr, "    at execve (node:internal/process/per_thread:0:0)\n");
-    fflush(stderr);
+    // Guard: stderr FILE* may be NULL on OHOS/musl.
+    if (stderr) {
+        fprintf(stderr, "process.execve failed with error code %s\n", errName ? errName : "UNKNOWN");
+        fprintf(stderr, "SystemError [process.execve]: execve %s: %s\n", strerror(savedErrno), execPathUtf8.data());
+        fprintf(stderr, "    at execve (node:internal/process/per_thread:0:0)\n");
+        fflush(stderr);
+    } else {
+        // Fallback: stderr FILE* is NULL — use write(2,...) directly.
+        // fd 2 is guaranteed valid by bun_initialize_process().
+        char buf[512];
+        int len = snprintf(buf, sizeof(buf),
+            "process.execve failed with error code %s\n"
+            "SystemError [process.execve]: execve %s: %s\n"
+            "    at execve (node:internal/process/per_thread:0:0)\n",
+            errName ? errName : "UNKNOWN",
+            strerror(savedErrno), execPathUtf8.data());
+        if (len > 0) write(2, buf, (size_t)(len < (int)sizeof(buf) ? len : (int)sizeof(buf) - 1));
+    }
 
     // Disable core dumps before aborting. Node also calls abort() here, but
     // Bun's CI treats any core file produced during a test run (including

@@ -1,6 +1,9 @@
 #pragma once
 
 #include "root.h"
+#if !OS(WINDOWS)
+#include <unistd.h>
+#endif
 #include <JavaScriptCore/DeferGC.h>
 #include <JavaScriptCore/JSFunction.h>
 #include <JavaScriptCore/VM.h>
@@ -319,11 +322,20 @@ public:
         // See: https://github.com/nodejs/node/blob/main/src/js_native_api_v8.h#L132-L143
         if (m_napiModule.nm_version == NAPI_VERSION_EXPERIMENTAL) {
             if (inGC()) {
-                fprintf(stderr, "FATAL ERROR: Finalizer is calling a function that may affect GC state.\n");
-                fprintf(stderr, "The finalizers are run directly from GC and must not affect GC state.\n");
-                fprintf(stderr, "Use `node_api_post_finalizer` from inside of the finalizer to work around this issue.\n");
-                fprintf(stderr, "It schedules the call as a new task in the event loop.\n");
-                fflush(stderr);
+                // Guard: stderr FILE* may be NULL on OHOS/musl.
+                if (stderr) {
+                    fprintf(stderr, "FATAL ERROR: Finalizer is calling a function that may affect GC state.\n");
+                    fprintf(stderr, "The finalizers are run directly from GC and must not affect GC state.\n");
+                    fprintf(stderr, "Use `node_api_post_finalizer` from inside of the finalizer to work around this issue.\n");
+                    fprintf(stderr, "It schedules the call as a new task in the event loop.\n");
+                    fflush(stderr);
+                } else {
+                    // Fallback: stderr FILE* is NULL — use write(2,...) directly.
+                    static const char msg[] =
+                        "[bun] FATAL: GC finalizer called a function that may affect GC state.\n"
+                        "[bun] Use node_api_post_finalizer to defer. (stderr FILE* was NULL)\n";
+                    (void)write(2, msg, sizeof(msg) - 1);
+                }
                 NAPI_ABORT("A Node-API function that may affect GC state was called from a finalizer during garbage collection");
             }
         }

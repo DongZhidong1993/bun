@@ -490,6 +490,33 @@ extern "C" int __wrap___libc_start_main(int (*main)(int, char**, char**), int ar
 #endif // glibc
 
 // musl
+// OHOS/musl NULL FILE* safety:
+//
+// On HarmonyOS/OHOS, which uses musl libc, the stdout/stderr/stdin FILE*
+// globals can be NULL when file descriptors 0/1/2 were not open at libc
+// initialization time. Unlike glibc (where __libc_stdio_init lazily binds
+// FILE* objects to the underlying fds), musl's FILE* pointers are set once
+// at libc startup and never updated if the fds are opened later.
+//
+// Bun handles this at three levels:
+//
+// 1. bun_initialize_process() (c-bindings.cpp): validates fds 0-2 and opens
+//    /dev/null for any that are invalid, BEFORE any stdio function is called.
+//    setvbuf() is guarded with NULL checks.
+//
+// 2. ffi_* wrappers (c-bindings.cpp): all stdio wrappers (ffi_fprintf,
+//    ffi_fflush, ffi_fclose, etc.) check for NULL FILE* and return a safe
+//    default (-1, EOF, 0) instead of dereferencing NULL.
+//
+// 3. Direct write() fallback: OHOS-specific code paths (e.g. the SIGSYS
+//    handler) use write(fd, ...) instead of fprintf(stderr, ...) to avoid
+//    the FILE* abstraction entirely.
+//
+// We intentionally do NOT override musl's stdio symbols (fwrite, fprintf,
+// etc.) here. Symbol interposition would require --wrap at link time and
+// would not cover third-party code (WebKit) that also calls stdio. Instead,
+// the combination of valid fds + NULL guards + write() fallback is
+// sufficient for Bun's own code paths.
 
 #endif // linux
 
