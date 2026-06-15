@@ -3240,7 +3240,7 @@ mod posix_platform_specific_v8_apis {
         -> *mut c_void;
     }
 }
-#[cfg(all(not(windows), any(target_os = "macos", target_os = "freebsd")))]
+#[cfg(all(not(windows), any(target_os = "macos", target_os = "freebsd", target_env = "ohos")))]
 mod posix_platform_specific_v8_apis {
     use core::ffi::c_void;
     // FreeBSD's base libc++ uses the same `std::__1::` inline namespace as Apple's.
@@ -4218,7 +4218,7 @@ pub fn fix_dead_code_elimination() {
     // posix_platform_specific_v8_apis
     #[cfg(all(not(windows), target_os = "android"))]
     keep_symbols!(posix_platform_specific_v8_apis::_ZN2v85Array3NewENS_5LocalINS_7ContextEEEmNSt6__ndk18functionIFNS_10MaybeLocalINS_5ValueEEEvEEE);
-    #[cfg(all(not(windows), any(target_os = "macos", target_os = "freebsd")))]
+    #[cfg(all(not(windows), any(target_os = "macos", target_os = "freebsd", target_env = "ohos")))]
     keep_symbols!(posix_platform_specific_v8_apis::_ZN2v85Array3NewENS_5LocalINS_7ContextEEEmNSt3__18functionIFNS_10MaybeLocalINS_5ValueEEEvEEE);
     #[cfg(all(
         not(windows),
